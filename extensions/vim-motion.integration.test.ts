@@ -160,4 +160,20 @@ describe("vim-motion integration", () => {
 		expect(editor.getText()).toBe('say "" end');
 		expect(editor.getCursor()).toEqual({ line: 0, col: 5 });
 	});
+
+	it("restyles the insert-mode cursor as a width-preserving bar", async () => {
+		const { barCursor } = await import("./vim-motion");
+		const { CURSOR_MARKER, visibleWidth } = await import("@mariozechner/pi-tui");
+
+		// focused: marker + reverse-video cursor
+		const focused = `${CURSOR_MARKER}\x1b[7mab\x1b[0mcd`;
+		expect(barCursor(focused)).toBe(`${CURSOR_MARKER}▏ cd`);
+		expect(visibleWidth(barCursor(focused))).toBe(visibleWidth(focused));
+
+		// unfocused (status panel has focus): no marker
+		expect(barCursor("\x1b[7m \x1b[0m")).toBe("▏");
+
+		// no cursor
+		expect(barCursor("plain")).toBe("plain");
+	});
 });

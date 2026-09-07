@@ -155,6 +155,25 @@ function highlight(text: string, start: number, end: number): string {
 	return `${text.slice(0, start)}\x1b[7m${text.slice(start, end)}\x1b[27m${text.slice(end)}`;
 }
 
+const BAR_CURSOR = "▏";
+
+// Swap pi's reverse-video block cursor for a thin bar, preserving cell width.
+// Focused: the cursor marker sits right before the cursor. Unfocused: the
+// cursor is the only reverse-video run on an editor line.
+export function barCursor(line: string): string {
+	const restyle = (prefix: string, cursor: string, width: number) =>
+		prefix + BAR_CURSOR + " ".repeat(Math.max(0, width - 1));
+	const idx = line.indexOf(CURSOR_MARKER);
+	if (idx !== -1) {
+		const after = line.slice(idx + CURSOR_MARKER.length);
+		const m = after.match(/^\x1b\[7m([\s\S]*?)\x1b\[0m/);
+		if (m) return restyle(line.slice(0, idx + CURSOR_MARKER.length), m[0], visibleWidth(m[1]!)) + after.slice(m[0].length);
+	}
+	const m = line.match(/\x1b\[7m([\s\S]*?)\x1b\[0m/);
+	if (m) return restyle(line.slice(0, m.index!), m[0], visibleWidth(m[1]!)) + line.slice(m.index! + m[0].length);
+	return line;
+}
+
 function splitAtVisibleColumn(text: string, column: number): [string, string] {
 	if (column <= 0) return ["", text];
 	let visible = 0;
@@ -911,6 +930,9 @@ class VimEditor extends CustomEditor {
 		if (this.mode === "visual" || this.mode === "visual-line") return this.renderVisual(width);
 		const lines = super.render(width);
 		if (lines.length === 0) return lines;
+		if (this.mode === "insert") {
+			for (let i = 0; i < lines.length; i++) lines[i] = barCursor(lines[i]!);
+		}
 		const label = this.mode === "normal" ? " NORMAL " : " INSERT ";
 		const last = lines.length - 1;
 		if (visibleWidth(lines[last]!) >= label.length) {
