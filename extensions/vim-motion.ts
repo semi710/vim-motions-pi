@@ -207,13 +207,20 @@ class VimEditor extends CustomEditor {
 	private lastFind: { kind: FindKind; ch: string; count: number } | null = null;
 	private register: Register = { text: "", linewise: false };
 	private visualAnchor: number = 0;
-	private escapeBuffer: string = "";
+	private escapeTyped: string = "";
+	private escapeTypedAt: number = 0;
 
 	private getEscapeSequence(): string | null {
 		const env = process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE;
 		if (!env) return null;
 		const seq = env.trim();
 		return seq.length >= 2 ? seq : null;
+	}
+
+	private getEscapeWindowMs(): number {
+		const v = process.env.VIM_MOTION_PI_ESCAPE_TIMEOUT_MS;
+		const n = v ? Number.parseInt(v, 10) : NaN;
+		return Number.isFinite(n) && n > 0 ? n : 100;
 	}
 
 	private renderIsFocused(): boolean {
@@ -615,6 +622,7 @@ class VimEditor extends CustomEditor {
 	handleInput(data: string): void {
 		if (matchesKey(data, "escape")) {
 			if (this.mode === "insert") {
+				this.escapeTyped = "";
 				this.setMode("normal");
 				return;
 			}
@@ -629,21 +637,29 @@ class VimEditor extends CustomEditor {
 
 		if (this.mode === "insert") {
 			const seq = this.getEscapeSequence();
-			if (seq) {
-				this.escapeBuffer += data;
-				if (this.escapeBuffer.endsWith(seq)) {
-					// Remove the escape sequence characters from the buffer
-					const toRemove = seq.length;
-					for (let i = 0; i < toRemove - 1; i++) {
-						super.handleInput("\x7f"); // backspace
-					}
-					this.escapeBuffer = "";
-					this.setMode("normal");
-					return;
+			// only single printable keystrokes feed the matcher; pastes and
+			// control sequences pass through untouched
+			if (seq && data.length === 1 && isPrintable(data)) {
+				const now = Date.now();
+				if (this.escapeTyped && now - this.escapeTypedAt > this.getEscapeWindowMs()) {
+					this.escapeTyped = "";
 				}
-				// Only keep the last N characters where N = sequence length
-				if (this.escapeBuffer.length > seq.length) {
-					this.escapeBuffer = this.escapeBuffer.slice(-seq.length);
+				const candidate = this.escapeTyped + data;
+				if (seq.startsWith(candidate)) {
+					this.escapeTyped = candidate;
+					this.escapeTypedAt = now;
+					if (candidate === seq) {
+						this.escapeTyped = "";
+						// earlier prefix chars are already in the buffer; delete them
+						for (let i = 1; i < seq.length; i++) {
+							super.handleInput("\x7f");
+						}
+						this.setMode("normal");
+						return;
+					}
+				} else {
+					this.escapeTyped = data === seq[0] ? data : "";
+					this.escapeTypedAt = now;
 				}
 			}
 			super.handleInput(data);

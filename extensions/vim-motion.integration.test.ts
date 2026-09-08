@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@mariozechner/pi-coding-agent", () => ({
 	CustomEditor: class {
@@ -12,7 +12,8 @@ vi.mock("@mariozechner/pi-coding-agent", () => ({
 		constructor(tui?: unknown, ..._args: unknown[]) {
 			this.tui = tui ?? { requestRender: () => {}, terminal: { rows: 24 } };
 		}
-		handleInput(_data: string): void {}
+		inserted: string[] = [];
+		handleInput(data: string): void { this.inserted.push(data); }
 		render(_width: number): string[] { return []; }
 		getText(): string { return this.text; }
 		getCursor(): { line: number; col: number } { return { line: this.state.cursorLine, col: this.state.cursorCol }; }
@@ -60,6 +61,8 @@ describe("vim-motion integration", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		delete process.env.VIM_MOTION_PI_CLIPBOARD;
+		delete process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE;
+		delete process.env.VIM_MOTION_PI_ESCAPE_TIMEOUT_MS;
 	});
 
 	it("registers the command and session_start handler", async () => {
@@ -175,5 +178,79 @@ describe("vim-motion integration", () => {
 
 		// no cursor
 		expect(barCursor("plain")).toBe("plain");
+	});
+
+	describe("escape sequence window", () => {
+		beforeEach(() => {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(1000);
+		});
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("inserts the prefix instantly and escapes when the sequence completes inside the window", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			process.env.VIM_MOTION_PI_ESCAPE_TIMEOUT_MS = "100";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("j");
+			expect(editor.inserted).toEqual(["j"]);
+			editor.handleInput("k");
+			expect((editor as any).mode).toBe("normal");
+			// j is deleted via backspace, k is never inserted
+			expect(editor.inserted).toEqual(["j", "\x7f"]);
+		});
+
+		it("types a literal jk when the second key lands after the window", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			process.env.VIM_MOTION_PI_ESCAPE_TIMEOUT_MS = "100";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("j");
+			vi.advanceTimersByTime(150);
+			editor.handleInput("k");
+			expect((editor as any).mode).toBe("insert");
+			expect(editor.inserted).toEqual(["j", "k"]);
+		});
+
+		it("keeps the prefix when a non-matching key follows", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("j");
+			editor.handleInput("x");
+			expect((editor as any).mode).toBe("insert");
+			expect(editor.inserted).toEqual(["j", "x"]);
+		});
+
+		it("restarts the prefix when the first key repeats", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("j");
+			editor.handleInput("j");
+			editor.handleInput("k");
+			expect((editor as any).mode).toBe("normal");
+			// first j stays, second j is deleted via backspace, k never inserted
+			expect(editor.inserted).toEqual(["j", "j", "\x7f"]);
+		});
+
+		it("clears a pending prefix when a real escape key is pressed", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("j");
+			editor.handleInput("\x1b");
+			expect((editor as any).mode).toBe("normal");
+			expect(editor.inserted).toEqual(["j"]);
+			editor.handleInput("i");
+			editor.handleInput("k");
+			expect((editor as any).mode).toBe("insert");
+			expect(editor.inserted).toEqual(["j", "k"]);
+		});
+
+		it("passes multi-char input through without matching", async () => {
+			process.env.VIM_MOTION_PI_ESCAPE_SEQUENCE = "jk";
+			const { editor } = await createEditorInstance();
+			editor.handleInput("hjk");
+			expect((editor as any).mode).toBe("insert");
+			expect(editor.inserted).toEqual(["hjk"]);
+		});
 	});
 });
